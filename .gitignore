@@ -23,8 +23,6 @@ __pycache__/
 
 # Local editor and operating-system files
 .vscode/
-# Office lock files, created while a document is open
-~$*
 .DS_Store
 Thumbs.db
 
@@ -38,3 +36,8 @@ Thumbs.db
 !/results/SIH26037_submission.mp4
 !*.pptx
 !*.pdf
+
+# Office lock files (~$name), created while a document is open. This must
+# stay AFTER the !*.pptx negation above: the last matching pattern wins, so
+# placing it earlier let the negation re-include the lock file.
+~$*
