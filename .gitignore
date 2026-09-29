@@ -1,17 +1,13 @@
-# Simulation and rendering outputs
+# Simulation and rendering outputs (regenerate with sih_run_all + tools/)
 /results/*
 /brag-output*/
 
-# Generated media and presentation files
-*.mp4
+# Generated intermediate media
 *.gif
 *.avi
 *.mov
 *.wav
 *.raw
-*.ppt
-*.pptx
-*.pdf
 .brag_ts
 
 # Python and MATLAB/Octave local artifacts
@@ -29,3 +25,11 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# SUBMISSION DELIVERABLES ARE TRACKED ON PURPOSE.
+# These were destroyed once by `git clean -xfd` because a blanket *.pptx /
+# *.pdf / *.mp4 ignore hid them from git. Keep them tracked so a clean cannot
+# remove them. Negations must come last: the final matching pattern wins.
+!/results/SIH26037_submission.mp4
+!*.pptx
+!*.pdf
