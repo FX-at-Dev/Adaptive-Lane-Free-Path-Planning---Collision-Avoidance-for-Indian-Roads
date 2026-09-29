@@ -1,6 +1,13 @@
 # Simulation and rendering outputs (regenerate with sih_run_all + tools/)
 /results/*
-/brag-output*/
+# Match the CONTENTS, not the directory: git cannot re-include a file
+# whose parent directory is excluded, and the finished brag video below
+# has to be re-includable.
+/brag-output/*
+/brag-output-*/
+!/brag-output/brag.mp4
+!/brag-output/brag.jpg
+!/brag-output/share-copy.txt
 
 # Generated intermediate media
 *.gif
