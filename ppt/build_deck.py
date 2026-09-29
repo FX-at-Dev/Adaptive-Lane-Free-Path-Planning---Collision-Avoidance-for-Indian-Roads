@@ -42,6 +42,9 @@ PS_TITLE_1 = "Adaptive Path Planning and Collision Avoidance"
 PS_TITLE_2 = "for Autonomous Vehicles on Unstructured Indian Roads"
 PS_TITLE_FULL = ("Adaptive Path Planning and Collision Avoidance for Autonomous Vehicles "
                  "on Unstructured Indian Roads")
+REPO_URL = ("https://github.com/FX-at-Dev/"
+            "Adaptive-Lane-Free-Path-Planning---Collision-Avoidance-for-Indian-Roads")
+REPO_SHOW = "github.com/FX-at-Dev/Adaptive-Lane-Free-Path-Planning---Collision-Avoidance-for-Indian-Roads"
 
 SCENARIOS = [
     ("village_road", "Village road"),
@@ -101,9 +104,11 @@ def box(sl, x, y, w, h, fill=None, line=BORDER, dash=True, radius=None, lw=1.0, 
     return s
 
 
-def _run(p, text, size, color, bold=False, italic=False, font=FONT, underline=False):
+def _run(p, text, size, color, bold=False, italic=False, font=FONT, underline=False, link=None):
     r = p.add_run()
     r.text = text
+    if link:
+        r.hyperlink.address = link
     f = r.font
     f.size, f.bold, f.italic, f.name = Pt(size), bold, italic, font
     f.color.rgb = rgb(color)
@@ -156,7 +161,8 @@ def text(sl, x, y, w, h, paras, size=12, color=DARK, align="l", anchor="t", marg
             else:
                 t, o = r
                 _run(p, t, o.get("size", psize), o.get("color", color), o.get("bold", False),
-                     o.get("italic", False), o.get("font", font), o.get("underline", False))
+                     o.get("italic", False), o.get("font", font), o.get("underline", False),
+                     o.get("link"))
     return tb
 
 
@@ -795,8 +801,10 @@ def build():
     heading(s6, 7.95, 5.05, 5.1, "Project Links", BLUE, size=17, align="l", icon_name="MdLink")
     box(s6, 7.95, 5.45, 5.1, 1.35)
     lk = {"color": BLUE, "underline": True, "bold": True}
+    repo = dict(lk, link=REPO_URL)
     text(s6, 8.05, 5.5, 4.95, 1.25, [
-        {"runs": [("1) Source Code Repository", lk)], "space_after": 5},
+        {"runs": [("1) Source Code Repository", repo)], "space_after": 1},
+        {"runs": [(REPO_SHOW, {"color": MUTED, "size": 8, "link": REPO_URL})], "space_after": 5},
         {"runs": [(f"2) Demo Video: All {n_done} Scenarios", lk)], "space_after": 5},
         {"runs": [("3) Metrics & Run Data (JSON)", lk)]},
     ], size=12, anchor="m")
