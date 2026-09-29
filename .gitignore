@@ -23,7 +23,8 @@ __pycache__/
 
 # Local editor and operating-system files
 .vscode/
-~$*          # Office lock files, created while a deck is open
+# Office lock files, created while a document is open
+~$*
 .DS_Store
 Thumbs.db
 
