@@ -1,8 +1,14 @@
 # SIH 26037 — Adaptive Path Planning for Unstructured Indian Roads
 
-Closed-loop simulation of an autonomous vehicle on unmarked, mixed-traffic Indian roads:
-perception → multi-sensor fusion → multi-hypothesis prediction → lattice planning →
-behaviour arbitration → vehicle dynamics.
+SIH 26037 is a reproducible, closed-loop autonomous-driving simulation for unmarked,
+mixed-traffic Indian roads. The stack combines perception, multi-sensor fusion,
+multi-hypothesis prediction, lattice planning, behaviour arbitration, and vehicle
+dynamics to keep an ego vehicle safe while it negotiates everyday road situations.
+
+The core implementation is written in portable MATLAB/GNU Octave code. Python tools
+turn exported simulation runs into figures, previews, demos, and the submission video.
+An optional Unity 6 project provides a live 3D world with simulated LiDAR, radar, and
+camera sensors.
 
 **Status: all five required scenarios run collision-free.** The Simulink model, Stateflow
 chart, RoadRunner scenes and the IDD detection demo are not built yet — see *Roadmap*.
@@ -43,18 +49,60 @@ out (see *Known limitations*). Four further worlds (market 376837, village road 
 152526, cattle crossing 849169) all reach it, with 0 collisions. The market's time swings with
 timing alone: whether a crossing pedestrian stops in front of the car or behind it.
 
-## Running it
+## Setup and quick start
 
-The algorithm core is toolbox-free and runs under GNU Octave, so none of this needs a MATLAB
-licence yet.
+### Prerequisites
+
+Required for the algorithm and tests:
+
+- GNU Octave 7 or newer, or MATLAB R2020b or newer
+- Git
+
+Required only for the Python rendering tools:
+
+- Python 3.8 or newer
+- `matplotlib` and `numpy`
+- `ffmpeg` on `PATH` for MP4 output
+
+The core simulation and tests do not require a MATLAB toolbox or Python. Unity live
+simulation additionally requires Unity 6 (6000.6) and the project under `unity/SIH3D`.
+
+Clone the repository, then run commands from its root directory so `startup.m` can
+resolve all source folders:
+
+```powershell
+git clone <repository-url>
+cd Adaptive-Lane-Free-Path-Planning---Collision-Avoidance-for-Indian-Roads
+```
+
+If Python rendering is needed, install its two Python packages in a virtual
+environment or user environment:
+
+```powershell
+py -m pip install matplotlib numpy
+```
+
+### Run the tests
 
 ```bash
 octave-cli --eval "startup; sih_test_all"
 ```
 
+The test command runs the numeric unit tests and the closed-loop regression checks.
+In MATLAB, open the repository root and run `startup; sih_test_all` in the Command
+Window instead.
+
+### Run all scenarios
+
 ```bash
 octave-cli --eval "startup; sih_run_all"
 ```
+
+The runner executes all five scenarios with their configured seeds and writes the
+exported metrics to `results/*.json`. To run one scenario interactively, call
+`sih_run_scenario` after `startup` from the Octave or MATLAB Command Window.
+
+### Render results (optional)
 
 ```bash
 python tools/make_video.py
@@ -64,9 +112,10 @@ python tools/make_video.py
 python tools/render_run.py results/village_road.json && python tools/make_demo.py
 ```
 
-`sih_run_all` runs every scenario with its own configuration and writes `results/*.json`.
 `make_video.py` builds the 1080p submission video; `render_run.py` makes per-scenario
-previews and `make_demo.py` builds a self-running fullscreen page for a laptop.
+previews and `make_demo.py` builds a self-running fullscreen page for a laptop. Render
+tools consume the JSON files produced by `sih_run_all`, so regenerate the results before
+rendering if the algorithm or scenario configuration has changed.
 
 Rendering lives in Python because the only Octave graphics toolkit available here requires a
 display. Simulation and rendering communicate through the exported JSON, so the pictures
