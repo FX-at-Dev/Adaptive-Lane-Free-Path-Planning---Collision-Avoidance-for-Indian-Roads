@@ -10,6 +10,7 @@ root = fileparts(mfilename('fullpath'));
 
 addpath(fullfile(root, 'core', 'world'));
 addpath(fullfile(root, 'core', 'sensors'));
+addpath(fullfile(root, 'core', 'perception'));
 addpath(fullfile(root, 'core', 'fusion'));
 addpath(fullfile(root, 'core', 'predict'));
 addpath(fullfile(root, 'core', 'plan'));
@@ -18,6 +19,7 @@ addpath(fullfile(root, 'core', 'vehicle'));
 addpath(fullfile(root, 'core', 'util'));
 addpath(fullfile(root, 'scenarios'));
 addpath(fullfile(root, 'sim'));
+addpath(fullfile(root, 'cosim'));
 addpath(fullfile(root, 'simulink'));
 addpath(fullfile(root, 'matlab'));
 addpath(fullfile(root, 'tests'));

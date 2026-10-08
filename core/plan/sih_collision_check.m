@@ -115,7 +115,15 @@ for a = 1:A
     % the severity follows from a single reduction -- there is no need to
     % materialise a discounted copy of the whole distance array, which was
     % measured to triple the cost of this loop.
-    [hasv, firstrow] = max(d2 < thresh2, [], 1);         % [1 x nC*nd]
+    %
+    % A path that pulls clear of something it starts too close to -- never
+    % nearer than at the start, further at the end -- is not in conflict
+    % with it. Counting the margin the vehicle already stood inside
+    % (stopped beside a cart, 0.8 m off) rejected every path, those pulling
+    % away included, and it stayed beside the cart for good. Standing still
+    % there, or edging closer, still counts.
+    escaping = (mind2 >= 0.98 * d2(1, :)) & (d2(end, :) > 1.02 * d2(1, :));
+    [hasv, firstrow] = max((d2 < thresh2) & ~(ones(nT, 1) * escaping), [], 1);   % [1 x nC*nd]
     sev_dc = double(hasv) .* disc(firstrow).';
     sev(a, :) = max(reshape(sev_dc, nC, nd), [], 2).';
 end

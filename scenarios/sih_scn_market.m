@@ -1,4 +1,4 @@
-function [scn, cfg] = sih_scn_market(cfg)
+function [scn, cfg] = sih_scn_market(cfg, seed)
 %SIH_SCN_MARKET Dense market street with mixed traffic at walking pace.
 %
 %   Scenario 4 of the five required by the problem statement.
@@ -18,6 +18,11 @@ function [scn, cfg] = sih_scn_market(cfg)
 %   Occlusion matters more here than anywhere else: pedestrians emerge from
 %   behind parked carts with very little warning, which is what the tracker's
 %   coasting and the predictor's class-conditioned uncertainty are for.
+%   [scn, cfg] = SIH_SCN_MARKET(cfg, seed) draws a random layout that keeps
+%   the scenario's story (sih_scn_random): which road users, how many, where,
+%   how fast and when are drawn from ranges, and the draw is checked against
+%   the rules of the road (sih_scn_validate). Without a seed the scripted
+%   layout below is used, which keeps the regression suite reproducible.
 
 if nargin < 1 || isempty(cfg)
     cfg = sih_config();
@@ -129,6 +134,9 @@ onc = sih_wp_path(scn.rp, [150 120  90  60  30  -5], [-1.9 -1.1 -2.1 -1.3 -1.8 -
 agents = [agents, local_mover(id, 'auto', scn.rp, 150, -0.8, 3.2, onc, 34.0)];
 
 scn.agents = agents;
+if nargin >= 2 && ~isempty(seed)
+    [scn, cfg] = sih_scn_random(scn, cfg, seed, @local_draw);
+end
 end
 
 % -------------------------------------------------------------------------
@@ -147,6 +155,11 @@ end
 
 % -------------------------------------------------------------------------
 function a = local_mover(id, class_name, rp, s0, d0, v, wp, t_spawn)
+% Due at s0 at t_spawn, it is already on its way there from the start.
+if t_spawn > 0 && size(wp, 1) >= 2
+    s_end = sih_cart2frenet(rp, wp(end, 1), wp(end, 2));
+    [s0, t_spawn] = sih_upstream(rp, s0, v, t_spawn, sign(s_end - s0));
+end
 [x0, y0] = sih_wp_at(rp, s0, d0);
 % Face the SECOND waypoint. The first one coincides with the start position
 % by construction, so aiming at it gives atan2(0,0) and an agent that begins
@@ -161,4 +174,30 @@ if size(wp,1) >= 2
     end
 end
 a = sih_agent_new(id, class_name, x0, y0, psi0, v, 'path', wp, t_spawn);
+end
+
+% -------------------------------------------------------------------------
+function A = local_draw(rp, cfg, R)
+%LOCAL_DRAW Market street: stalls and pushcarts narrowing the road on
+%   alternating sides, pedestrians crossing, a cyclist, an oncoming rickshaw.
+L = rp.length; A = []; id = 0;
+s = R.u(25, 35); side = R.pick({1, -1});
+while s < L - 25
+    id = id + 1;
+    A = [A, sih_role('parked', id, R.pick({'pushcart', 'static', 'pushcart'}), rp, s, side * R.u(3.2, 3.5))]; %#ok<AGROW>
+    side = -side;
+    s = s + R.u(25, 42);
+end
+for k = 1:R.int(3, 5)
+    id = id + 1;
+    sp = R.u(40, L - 8); side = R.pick({1, -1});
+    A = [A, sih_role('walker', id, 'pedestrian', rp, sp, side * 4.8, -side * 4.8, R.u(0.9, 1.2), ...
+                     max(0, sp / 2.6 - R.u(6, 12)))]; %#ok<AGROW>
+end
+id = id + 1;
+s0 = R.u(35, 60); sl = s0 + 25:25:L; dl = arrayfun(@(~) R.u(-0.6, 1.0), sl);
+A = [A, sih_role('mover', id, 'bicycle', rp, s0, R.u(0.4, 1.2), R.u(2.0, 2.8), sl, dl, 0)];
+id = id + 1;
+s0 = R.u(130, L - 5); sl = s0 - 30:-30:-5; dl = arrayfun(@(~) R.u(-2.2, -1.0), sl);
+A = [A, sih_role('mover', id, 'auto', rp, s0, -0.8, R.u(2.8, 3.6), sl, dl, R.u(25, 45))];
 end

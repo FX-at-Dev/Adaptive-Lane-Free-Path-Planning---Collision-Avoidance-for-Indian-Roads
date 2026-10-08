@@ -8,6 +8,13 @@ function [summary, all_metrics] = sih_run_all(names, opts)
 %       .export    write results/<name>.json for each run (default true)
 %       .verbose   per-step console output from each run (default false)
 %       .seed      override cfg.sim.seed for every scenario
+%       .think     record what the stack was thinking each frame, for the 3D
+%                  visualiser (default false). Observation only: the metrics
+%                  are identical either way, apart from wall-clock latency.
+%       .out_dir   where the JSON goes (default results/)
+%       .layouts   random layout seeds: each scenario is run once per seed
+%                  with a random layout that keeps its story (the scenario's
+%                  seed argument) instead of the scripted one
 %
 %   This is the function that produces the scenario-completion rate the problem
 %   statement asks for. Each scenario is run with its OWN configuration -- speed
@@ -23,6 +30,23 @@ end
 if nargin < 2, opts = struct(); end
 if ~isfield(opts, 'export'),  opts.export  = true;  end
 if ~isfield(opts, 'verbose'), opts.verbose = false; end
+if ~isfield(opts, 'think'),   opts.think   = false; end
+if ~isfield(opts, 'out_dir') || isempty(opts.out_dir)
+    opts.out_dir = fullfile(local_root(), 'results');
+end
+
+% Random layouts: one run per scenario per seed.
+seeds = cell(1, numel(names));
+if isfield(opts, 'layouts') && ~isempty(opts.layouts)
+    base = names;
+    names = {};
+    for k = 1:numel(base)
+        for sd = reshape(opts.layouts, 1, [])
+            names{end+1} = base{k}; %#ok<AGROW>
+            seeds{numel(names)} = sd;
+        end
+    end
+end
 
 n = numel(names);
 all_metrics = cell(1, n);
@@ -38,21 +62,29 @@ for k = 1:n
         continue;
     end
 
-    [scn, cfg] = feval(builder);
+    if isempty(seeds{k})
+        [scn, cfg] = feval(builder);
+        label = name;
+    else
+        [scn, cfg] = feval(builder, [], seeds{k});
+        label = sprintf('%s#%d', name, seeds{k});
+    end
     cfg.verbose = opts.verbose;
     if isfield(opts, 'seed') && ~isempty(opts.seed)
         cfg.sim.seed = opts.seed;
     end
 
-    fprintf('  run   %-20s ... ', name);
+    fprintf('  run   %-24s ... ', label);
     t0 = tic;
     [result, log] = sih_run_scenario(scn, cfg, ...
-        struct('verbose', opts.verbose, 'snapshots', opts.export));
+        struct('verbose', opts.verbose, 'snapshots', opts.export, ...
+               'think', opts.think && opts.export));
     wall = toc(t0);
 
     m = sih_metrics(result, log, cfg);
     all_metrics{k} = m;
     rows{k} = local_row(name, result, m, wall);
+    rows{k}.label = label;
 
     if result.collided
         verdict = 'COLLISION';
@@ -64,7 +96,7 @@ for k = 1:n
     fprintf('%-10s  %5.1fs wall\n', verdict, wall);
 
     if opts.export
-        sih_export_run(scn, cfg, result, log, fullfile(local_root(), 'results'));
+        sih_export_run(scn, cfg, result, log, opts.out_dir);
     end
 end
 
@@ -80,8 +112,8 @@ fprintf('%-20s %6s %6s %8s %8s %9s %8s %8s %7s\n', ...
 fprintf('%s\n', repmat('-', 1, 92));
 for k = 1:numel(rows)
     r = rows{k};
-    fprintf('%-20s %6s %6s %8.2f %8.1f %9.1f %8.2f %8.3f %7.2f\n', ...
-            kept_names{k}, r.goal, r.coll, r.minclr, r.time, ...
+    fprintf('%-24s %6s %6s %8.2f %8.1f %9.1f %8.2f %8.3f %7.2f\n', ...
+            r.label, r.goal, r.coll, r.minclr, r.time, ...
             r.lat95, r.jerk, r.curv, r.vmean);
 end
 fprintf('%s\n', repmat('-', 1, 92));

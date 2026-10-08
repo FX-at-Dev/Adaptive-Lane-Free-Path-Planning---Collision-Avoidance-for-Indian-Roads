@@ -27,25 +27,15 @@ end
 
 m = sih_metrics(result, log, cfg);
 
-% ---- road geometry, decimated ------------------------------------------
-% The reference path is sampled every 0.25 m, which is far finer than any
-% renderer needs and would dominate the file size.
-step = max(1, round(1.0 / scn.rp.ds));
-idx  = 1:step:numel(scn.rp.s);
-
-data.meta.name       = scn.name;
-data.meta.desc       = scn.desc;
-data.meta.dt         = cfg.sim.dt;
-data.meta.replan_dt  = cfg.sim.replan_dt;
-data.meta.goal       = scn.goal;
-data.meta.v_max      = cfg.plan.v_max;
-data.meta.ego_length = cfg.ego.length;
-data.meta.ego_width  = cfg.ego.width;
-data.meta.latency_budget = cfg.metric.latency_budget;
-
-data.road.x  = scn.rp.x(idx).';
-data.road.y  = scn.rp.y(idx).';
-data.road.hw = scn.rp.halfwidth(idx).';
+% ---- meta and road -----------------------------------------------------
+% Footprint of every class present, so a viewer sizes agents from the same
+% table the simulation used rather than from its own copy.
+classes = {};
+for k = 1:numel(log.snaps)
+    classes = [classes, {log.snaps{k}.agents.class}]; %#ok<AGROW>
+end
+think = ~isempty(log.snaps) && isfield(log.snaps{1}, 'think');
+data = sih_export_header(scn, cfg, classes, think);
 
 % ---- ego time series ----------------------------------------------------
 data.series.t          = log.t.';
@@ -71,31 +61,7 @@ data.series.latency_ms = log.latency_ms(li).';
 % ---- per-frame world snapshots -----------------------------------------
 frames = cell(1, numel(log.snaps));
 for k = 1:numel(log.snaps)
-    s = log.snaps{k};
-    f.t     = s.t;
-    f.state = s.state;
-    f.ego   = [s.ego.x, s.ego.y, s.ego.psi, s.ego.v];
-
-    na = numel(s.agents);
-    f.agents = zeros(na, 3);
-    f.agent_class = cell(1, na);
-    for i = 1:na
-        f.agents(i,:)    = [s.agents(i).x, s.agents(i).y, s.agents(i).psi];
-        f.agent_class{i} = s.agents(i).class;
-    end
-
-    nt = numel(s.tracks);
-    f.tracks = zeros(nt, 4);
-    f.track_class = cell(1, nt);
-    for i = 1:nt
-        f.tracks(i,:)    = [s.tracks(i).x, s.tracks(i).y, s.tracks(i).psi, s.tracks(i).v];
-        f.track_class{i} = s.tracks(i).class;
-    end
-
-    % The planned trajectory is short; decimate lightly.
-    f.traj = [s.traj_x(:).'; s.traj_y(:).'];
-
-    frames{k} = f;
+    frames{k} = sih_export_frame(log.snaps{k});
 end
 data.frames = frames;
 

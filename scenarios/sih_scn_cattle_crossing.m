@@ -1,4 +1,4 @@
-function [scn, cfg] = sih_scn_cattle_crossing(cfg)
+function [scn, cfg] = sih_scn_cattle_crossing(cfg, seed)
 %SIH_SCN_CATTLE_CROSSING Cattle stepping into the road at speed, with no warning.
 %
 %   Scenario 5 of the five required by the problem statement.
@@ -20,6 +20,11 @@ function [scn, cfg] = sih_scn_cattle_crossing(cfg)
 %   The event is deliberately time-triggered rather than present from the
 %   start, so the run measures reaction and replanning rather than route
 %   planning around a known obstacle.
+%   [scn, cfg] = SIH_SCN_CATTLE_CROSSING(cfg, seed) draws a random layout that keeps
+%   the scenario's story (sih_scn_random): which road users, how many, where,
+%   how fast and when are drawn from ranges, and the draw is checked against
+%   the rules of the road (sih_scn_validate). Without a seed the scripted
+%   layout below is used, which keeps the regression suite reproducible.
 
 if nargin < 1 || isempty(cfg)
     cfg = sih_config();
@@ -27,7 +32,7 @@ end
 
 cfg.plan.v_max              = 12.0;   % ~43 km/h on open rural road
 cfg.plan.corridor_halfwidth = 3.7;
-cfg.sim.t_end               = 100.0;
+cfg.sim.t_end               = 140.0;   % room for a herd crossing and random traffic
 
 % Cattle are slow and unpredictable; look further ahead than on the village
 % road so the vehicle has room to shed speed smoothly rather than emergency
@@ -89,6 +94,9 @@ auto = local_mover(5, 'auto',        scn.rp,  60,  1.2, 7.0, auto_wp, 0);
 tw   = local_mover(6, 'two_wheeler', scn.rp, 238, -1.8, 7.0, tw_wp,  38.0);
 
 scn.agents = [truck, cow1, cow2, cow3, auto, tw];
+if nargin >= 2 && ~isempty(seed)
+    [scn, cfg] = sih_scn_random(scn, cfg, seed, @local_draw);
+end
 end
 
 % -------------------------------------------------------------------------
@@ -112,6 +120,11 @@ end
 
 % -------------------------------------------------------------------------
 function a = local_mover(id, class_name, rp, s0, d0, v, wp, t_spawn)
+% Due at s0 at t_spawn, it is already on its way there from the start.
+if t_spawn > 0 && size(wp, 1) >= 2
+    s_end = sih_cart2frenet(rp, wp(end, 1), wp(end, 2));
+    [s0, t_spawn] = sih_upstream(rp, s0, v, t_spawn, sign(s_end - s0));
+end
 [x0, y0] = sih_wp_at(rp, s0, d0);
 psi0 = sih_wp_heading(rp, s0);
 if size(wp, 1) >= 2
@@ -122,4 +135,27 @@ if size(wp, 1) >= 2
     end
 end
 a = sih_agent_new(id, class_name, x0, y0, psi0, v, 'path', wp, t_spawn);
+end
+
+% -------------------------------------------------------------------------
+function A = local_draw(rp, cfg, R)
+%LOCAL_DRAW Cattle crossing: a parked lorry hides cattle that step out from
+%   behind it across the road, with traffic both ways.
+L = rp.length; A = []; id = 0;
+S = R.u(90, 125); side = R.pick({1, -1});
+id = id + 1;
+A = [A, sih_role('parked', id, R.pick({'truck', 'bus'}), rp, S - R.u(10, 16), side * 3.1)];
+off = 0;
+for k = 1:R.int(2, 4)
+    id = id + 1;
+    off = off + R.u(2, 6);
+    A = [A, sih_role('crosser', id, 'cattle', rp, S - 2 + off, side * R.u(5.0, 6.2), -side * R.u(5.0, 5.6), ...
+                     R.u(0.7, 1.1), max(0, S / 9.5 - R.u(1, 3.5) + 0.3 * off))]; %#ok<AGROW>
+end
+id = id + 1;
+s0 = R.u(45, 75); sl = s0 + 50:50:L + 10; dl = arrayfun(@(~) R.u(0.4, 1.2), sl);
+A = [A, sih_role('mover', id, 'auto', rp, s0, R.u(0.6, 1.4), R.u(6, 8), sl, dl, 0)];
+id = id + 1;
+s0 = L - R.u(0, 10); sl = s0 - 50:-50:-10; dl = arrayfun(@(~) R.u(-1.2, -0.6), sl);
+A = [A, sih_role('mover', id, 'two_wheeler', rp, s0, R.u(-1.9, -1.2), R.u(6.5, 8), sl, dl, R.u(30, 45))];
 end

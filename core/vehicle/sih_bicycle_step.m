@@ -1,12 +1,18 @@
-function ego = sih_bicycle_step(ego, a_cmd, delta_cmd, dt, cfg)
+function ego = sih_bicycle_step(ego, a_cmd, delta_cmd, dt, cfg, gear)
 %SIH_BICYCLE_STEP Advance the kinematic bicycle model by one step.
 %
-%   ego = SIH_BICYCLE_STEP(ego, a_cmd, delta_cmd, dt, cfg) integrates the
+%   ego = SIH_BICYCLE_STEP(ego, a_cmd, delta_cmd, dt, cfg, gear) integrates the
 %   rear-axle kinematic bicycle model
 %       x'   = v cos(psi)
 %       y'   = v sin(psi)
 %       psi' = v tan(delta) / L
 %   subject to acceleration, steering angle and steering rate limits.
+%
+%   gear is +1 (forward, the default) or -1 (reverse). In forward gear the
+%   speed stays at or above zero, in reverse at or below it, down to
+%   -cfg.veh.v_reverse_max: braking stops the vehicle, it never carries it
+%   into the other direction. a_cmd is the change of the signed speed, so in
+%   reverse a negative a_cmd backs up faster and a positive one brakes.
 %
 %   ego has fields x, y, psi, v, delta. The actuator limits are applied first
 %   (they are non-smooth saturations, so they do not belong inside the
@@ -26,12 +32,23 @@ d_step   = cfg.veh.delta_rate * dt;
 delta    = ego.delta + min(max(d_target - ego.delta, -d_step), d_step);
 delta    = min(max(delta, -cfg.veh.delta_max), cfg.veh.delta_max);
 
-% A reversing vehicle is out of scope for the lattice planner, so speed is
-% clamped at zero. Clamp the deceleration too, otherwise the RK4 stages would
-% integrate motion through a step in which the vehicle actually stops early.
+% The speed may not cross zero within a gear: forward it is clamped at zero
+% (the lattice planner plans forward only), in reverse at zero from below
+% (sih_reverse backs out of a box). Clamp the acceleration too, otherwise
+% the RK4 stages would integrate motion through a step in which the
+% vehicle actually stops early.
+if nargin < 6 || isempty(gear), gear = 1; end
 v0 = ego.v;
-if v0 + a*dt < 0
-    a = -v0 / dt;
+if gear >= 0
+    if v0 + a*dt < 0
+        a = -v0 / dt;
+    end
+else
+    if v0 + a*dt > 0
+        a = -v0 / dt;
+    elseif v0 + a*dt < -cfg.veh.v_reverse_max
+        a = (-cfg.veh.v_reverse_max - v0) / dt;
+    end
 end
 
 % ---- RK4 on (x, y, psi) with v(t) = v0 + a t, delta constant -------------
@@ -50,7 +67,11 @@ z  = z0 + (dt/6) * (k1 + 2*k2 + 2*k3 + k4);
 ego.x     = z(1);
 ego.y     = z(2);
 ego.psi   = sih_wrap_pi(z(3));
-ego.v     = max(0, v0 + a*dt);
+if gear >= 0
+    ego.v = max(0, v0 + a*dt);
+else
+    ego.v = min(0, v0 + a*dt);
+end
 ego.delta = delta;
 ego.a     = a;
 end

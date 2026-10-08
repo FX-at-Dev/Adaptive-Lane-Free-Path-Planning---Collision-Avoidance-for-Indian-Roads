@@ -1,4 +1,9 @@
 function pred = sih_predict_intent(tracks, cfg)
+%   (Every object is its footprint, sih_footprint: real centre, long-axis
+%   orientation and size. A stationary object gets one hypothesis -- it stays
+%   where it is, as it is -- because rolling a parked object forward with its
+%   filter heading and turn rate, which are noise, swept its footprint round
+%   on the spot and across the road.)
 %SIH_PREDICT_INTENT Class-conditioned multi-hypothesis motion prediction.
 %
 %   pred = SIH_PREDICT_INTENT(tracks, cfg) turns confirmed tracks into the
@@ -10,6 +15,7 @@ function pred = sih_predict_intent(tracks, cfg)
 %       pred.w    [1 x A]  probability weight of the owning hypothesis
 %       pred.hyp  [1 x A]  hypothesis id shared by one hypothesis's discs
 %       pred.src  [1 x A]  originating track id (diagnostics and plotting)
+%       pred.mode [1 x A]  hypothesis kind, an index into pred.mode_names
 %
 %   Why multi-hypothesis rather than a single extrapolation. On a laned road a
 %   constant-turn-rate extrapolation is a good bet, because the lane tells the
@@ -35,6 +41,8 @@ pred.r   = zeros(1, 0);
 pred.w   = zeros(1, 0);
 pred.hyp = zeros(1, 0);
 pred.src = zeros(1, 0);
+pred.mode = zeros(1, 0);
+pred.mode_names = {'keep', 'brake', 'left', 'right'};
 
 if isempty(tracks)
     return;
@@ -52,6 +60,7 @@ for i = 1:numel(tracks)
     end
 
     props = sih_agent_props(t.class);
+    fp = sih_footprint(t, cfg);
 
     % Positional uncertainty from the filter feeds straight into the footprint
     % the planner must avoid, so a poorly observed track is given a wider
@@ -59,6 +68,19 @@ for i = 1:numel(tracks)
     sigma0 = sqrt(max(t.P(1,1), 0) + max(t.P(2,2), 0));
 
     [modes, weights] = local_hypotheses(props);
+    if fp.still
+        modes = {'keep'};
+        weights = 1;
+    end
+    % An object not yet established may be a ghost. It slows the vehicle
+    % (sih_behavior_fsm, ra.caution_gap) and nothing more: weighed in the
+    % planner, even lightly, it was still enough to reject every path, and
+    % "no plan" brought the car to an emergency stop for nothing. Real, it is
+    % established within cfg.track.establish_hits scans and counts in full.
+    if isfield(t, 'established') && ~t.established
+        weights = weights * cfg.track.ghost_weight;
+        if cfg.track.ghost_weight <= 0, continue; end
+    end
 
     for m = 1:numel(modes)
         if weights(m) < 0.02
@@ -66,7 +88,15 @@ for i = 1:numel(tracks)
         end
         hyp_id = hyp_id + 1;
 
-        [hx, hy, hpsi] = local_rollout(t.x, modes{m}, props, pred.t, cfg);
+        if fp.still
+            hx = fp.cx * ones(K, 1);
+            hy = fp.cy * ones(K, 1);
+            hpsi = fp.theta * ones(K, 1);
+        else
+            x0 = t.x;
+            x0(1) = fp.cx; x0(2) = fp.cy;
+            [hx, hy, hpsi] = local_rollout(x0, modes{m}, props, pred.t, cfg);
+        end
 
         % Radius grows with horizon: prediction error accumulates, and for
         % erratic classes it accumulates faster.
@@ -78,19 +108,18 @@ for i = 1:numel(tracks)
         % closed the gap beside every stall on a market street and left the
         % vehicle wedged with nowhere feasible to put itself. The floor keeps
         % some growth for a stopped agent that might move off.
-        spd = abs(t.x(3));
+        spd = abs(t.x(3)) * ~fp.still;
         mob = max(0.2, min(1.0, spd / max(props.v_typ, 0.5)));
         grow = cfg.pred.sigma_grow * (0.5 + props.erratic) * mob * pred.t;
-        rad  = props.radius + cfg.risk.inflate + 0.5 * sigma0;
+        rad  = fp.r + cfg.risk.inflate + 0.5 * sigma0;
 
-        nd = props.n_discs;
-        cx = zeros(K, nd);
-        cy = zeros(K, nd);
-        for k = 1:K
-            [dx, dy] = sih_agent_discs(hx(k), hy(k), hpsi(k), props);
-            cx(k, :) = dx;
-            cy(k, :) = dy;
-        end
+        % The footprint's discs, carried along the hypothesis: spaced along
+        % its long axis while still, along the direction of travel while
+        % moving (sih_footprint already chose which).
+        nd = fp.n;
+        offs = -fp.L / 2 + (fp.L / nd) * ((1:nd) - 0.5);
+        cx = hx * ones(1, nd) + cos(hpsi) * offs;
+        cy = hy * ones(1, nd) + sin(hpsi) * offs;
 
         % One radius per disc column. The time-varying growth cannot be
         % expressed in a per-column radius, so it is folded in at its
@@ -98,7 +127,7 @@ for i = 1:numel(tracks)
         % single radius per column by design, and averaging keeps the check
         % conservative early and slightly optimistic at the far end of the
         % horizon, where the trajectory will have been replanned long before.
-        rcol = rad + mean(grow);
+        rcol = rad + sih_mean(grow);
 
         pred.x   = [pred.x,   cx];
         pred.y   = [pred.y,   cy];
@@ -106,6 +135,7 @@ for i = 1:numel(tracks)
         pred.w   = [pred.w,   weights(m) * ones(1, nd)];
         pred.hyp = [pred.hyp, hyp_id * ones(1, nd)];
         pred.src = [pred.src, t.id * ones(1, nd)];
+        pred.mode = [pred.mode, m * ones(1, nd)];
     end
 end
 end
@@ -173,8 +203,22 @@ hx(1)   = x(1);
 hy(1)   = x(2);
 hpsi(1) = x(4);
 
+dt2 = dt^2;
 for k = 2:K
-    x = sih_ctrv_motion(x, dt);
+    % sih_ctrv_motion's state update, inline: no Jacobian is needed here,
+    % and a function call per step per hypothesis was a sizeable share of
+    % a stack step. Same arithmetic, same result.
+    v = x(3); psi = x(4); w = x(5);
+    if abs(w) > 1e-4
+        psi1 = psi + w * dt;
+        x(1) = x(1) + (v / w) * (sin(psi1) - sin(psi));
+        x(2) = x(2) + (v / w) * (cos(psi) - cos(psi1));
+        x(4) = psi1;
+    else
+        x(1) = x(1) + v * cos(psi) * dt - 0.5 * v * sin(psi) * w * dt2;
+        x(2) = x(2) + v * sin(psi) * dt + 0.5 * v * cos(psi) * w * dt2;
+        x(4) = psi + w * dt;
+    end
 
     % Longitudinal intent.
     x(3) = max(0, x(3) + a_lon * dt);

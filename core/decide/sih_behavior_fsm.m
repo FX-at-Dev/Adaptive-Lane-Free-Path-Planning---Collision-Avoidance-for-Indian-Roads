@@ -16,6 +16,7 @@ function [fsm, bp] = sih_behavior_fsm(fsm, ego, ra, plan_info, cfg)
 %       bp.v_cap     speed ceiling
 %       bp.d_max     lateral freedom either side of the corridor centreline
 %       bp.risk_tol  acceptable probability mass of predicted conflict
+%       bp.reason    one line saying why, for logs and the live HUD
 %
 %   Keeping the decision layer to three numbers is what makes it tractable:
 %   the planner stays a single optimiser rather than a pile of special cases,
@@ -73,8 +74,26 @@ unstick = (fsm.stuck > cfg.dec.stuck_cycles) && (ra.min_clear > cfg.dec.stuck_cl
 
 % Only a genuine proximity or time-to-collision breach forces an immediate
 % stop. Planner infeasibility does not: see the escalation ladder below.
-critical = ra.ttc < cfg.dec.ttc_emergency || ...
-           ra.min_clear < cfg.dec.clear_stop;
+% Proximity is a reason to stop while the vehicle is moving, or when what is
+% close is moving. Stopped beside something that is not moving, standing
+% still changes nothing: a pedestrian who halted half a metre from the
+% bumper to let the car go, and the car holding STOP until the pedestrian
+% went, waited for each other for the rest of the run. There the planner,
+% which never accepts a path into the object, decides whether to move.
+% A time to collision with something standing still is an emergency only
+% when the vehicle could not brake short of it. Pulling out from 2.5 m
+% behind a parked cart at walking pace is a TTC of under two seconds, yet
+% stopping takes 0.3 m; braking there stopped every pull-out, and the
+% vehicle backed up and tried again for the rest of the run. The gap, not
+% the disc clearance, decides: beside a parked bus whose tracked heading was
+% 12 degrees out, the discs showed 1.3 m while its corner was at the nose.
+ttc_breach = ra.ttc < cfg.dec.ttc_emergency;
+if ttc_breach && isfield(ra, 'lead_still') && ra.lead_still
+    ttc_breach = ra.lead_gap < ego.v ^ 2 / (2 * abs(cfg.veh.a_min)) + cfg.dec.clear_stop;
+end
+critical = ttc_breach || ...
+           ra.min_clear_moving < cfg.dec.clear_stop || ...
+           (ra.min_clear < cfg.dec.clear_stop && ~stopped);
 
 % Recovery: stopped, no acceptable plan, but real clearance all round. Creeping
 % is what a human driver does here -- edge forward until the situation clears.
@@ -102,8 +121,17 @@ following = ra.lead_id > 0 && isfinite(ra.lead_gap) && ...
 
 if critical && ~unstick
     state = 'STOP';
+    if ra.min_clear < cfg.dec.clear_stop
+        why = sprintf('clearance %.2f m under the %.2f m stop limit', ...
+                      ra.min_clear, cfg.dec.clear_stop);
+    else
+        why = sprintf('TTC %.1f s under the %.1f s emergency limit', ...
+                      ra.ttc, cfg.dec.ttc_emergency);
+    end
 elseif unstick
     state = 'CREEP';
+    why = sprintf('stationary %.1f s with %.1f m clear, edging out', ...
+                  fsm.stuck * cfg.sim.replan_dt, ra.min_clear);
 elseif infeasible && ~stopped
     % GRADUATED ESCALATION. "No plan met the risk tolerance" usually means
     % "not at this speed", not "not at all": the risk a candidate carries
@@ -115,20 +143,35 @@ elseif infeasible && ~stopped
     % speed cap first, which shortens the swept path and usually restores
     % feasibility without ever coming to a halt.
     state = local_escalate(prev_state);
+    why = sprintf('no plan within risk tolerance, escalating from %s', prev_state);
 elseif recovering
     state = 'CREEP';
+    why = sprintf('stopped without a plan but %.1f m clear, creeping', ra.min_clear);
 elseif yielding
     state = 'YIELD';
+    why = sprintf('agent #%d crossing, %.1f s to conflict', ra.cross_id, ra.cross_ttc);
 elseif cautious
     if can_nudge && ra.n_near <= 4
         state = 'NUDGE';
+        if ra.free_left >= ra.free_right
+            why = sprintf('%.1f m clearance, %.1f m free left, easing around', ...
+                          ra.min_clear, ra.free_left);
+        else
+            why = sprintf('%.1f m clearance, %.1f m free right, easing around', ...
+                          ra.min_clear, ra.free_right);
+        end
     else
         state = 'CREEP';
+        why = sprintf('tight: %.1f m clearance, %d agents near, %.1f m room', ...
+                      ra.min_clear, ra.n_near, room);
     end
 elseif following
     state = 'FOLLOW';
+    why = sprintf('following #%d, %.1f m ahead at %.1f m/s', ...
+                  ra.lead_id, ra.lead_gap, ra.lead_speed);
 else
     state = 'CRUISE';
+    why = 'clear road';
 end
 
 % ---- hysteresis ---------------------------------------------------------
@@ -143,6 +186,7 @@ if sev_new >= sev_old
 else
     if fsm.hold > 0
         fsm.hold = fsm.hold - 1;
+        why      = sprintf('holding %s, would relax to %s: %s', prev_state, state, why);
         state    = prev_state;      % not yet allowed to relax
     else
         fsm.hold = local_hold_cycles(state);
@@ -225,8 +269,55 @@ switch state
         error('sih_behavior_fsm:state', 'Unhandled state "%s".', state);
 end
 
+% How strongly the planner holds the lane (a factor on cfg.plan.w_offset).
+% Easing past something in the way means leaving the lane -- pulling out
+% early round a car parked at the kerb, not stopping a metre behind it with
+% no room left to steer out. Yielding or stopping, the vehicle keeps to its
+% lane and leaves the other one free.
+switch state
+    case 'NUDGE', bp.lane_w = 0.15;
+    case 'CREEP', bp.lane_w = 0.3;
+    otherwise,    bp.lane_w = 1.0;
+end
+
+% Keep room to pull out. Behind something standing in the path -- a cart,
+% a stall, a parked lorry -- the vehicle stops far enough back to steer
+% round it later, as a driver does, rather than a metre behind it: from
+% there a car that cannot reverse has no way out, and it waited behind the
+% cart for the rest of the run. Once it is easing out round it, the object
+% is no longer in its path and this lifts.
+% The planner keeps it there (bp.hold: no path may end closer while still
+% in line with it); pulling out round it, or standing still, is allowed.
+% Pulling out takes forward travel -- two metres across needs several along
+% -- so behind it the speed allowed is enough to plan a pull-out, and the
+% hold line, not a speed limit, keeps the vehicle from creeping up to it.
+bp.hold = zeros(0, 3);
+if isfield(ra, 'still_ahead') && ~isempty(ra.still_ahead)
+    bp.hold = [ra.still_ahead(:, 1) - cfg.dec.standoff, ra.still_ahead(:, 2:3)];
+end
+if ra.lead_id > 0 && isfield(ra, 'lead_still') && ra.lead_still && ~isempty(ra.lead_box)
+    if ra.lead_gap < cfg.dec.standoff + 3 && ~strcmp(state, 'STOP')
+        bp.v_cap = max(bp.v_cap, cfg.dec.pullout_speed);
+        why = sprintf('%s; %.0f m back from #%d, pulling out round it when clear', why, ra.lead_gap, ra.lead_id);
+    end
+end
+
+% Cruise on past what may be a ghost. Something in the path that is not
+% yet established (sih_tracker_step) caps the speed at what a gentle brake
+% stops from short of it, and nothing more: the vehicle slows. If it is
+% still there once established it is stopped for like anything else; if it
+% was a ghost it is gone, the cap lifts and the vehicle is back at cruise.
+if isfield(ra, 'caution_gap') && isfinite(ra.caution_gap)
+    v_c = sqrt(2 * cfg.dec.caution_decel * max(ra.caution_gap - cfg.dec.caution_margin, 0));
+    if v_c < bp.v_cap
+        bp.v_cap = v_c;
+        why = sprintf('%s; slowing for #%d %.0f m ahead until it is confirmed', why, ra.caution_id, ra.caution_gap);
+    end
+end
+
 bp.state   = state;
 bp.unstick = unstick;
+bp.reason  = why;
 end
 
 % -------------------------------------------------------------------------

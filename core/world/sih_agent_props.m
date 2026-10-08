@@ -20,7 +20,16 @@ function p = sih_agent_props(class_name)
 %   into one motion model is exactly the assumption that fails on Indian
 %   roads, so they are kept explicit and tunable here.
 
-switch lower(class_name)
+% The table never changes; the tracker asks for it tens of thousands of
+% times a run, so each class is built once.
+persistent cache
+key = lower(class_name);
+if ~isempty(cache) && isfield(cache, key)
+    p = cache.(key);
+    return;
+end
+
+switch key
     case 'car'
         p = local_make(4.20, 1.80,  8.0, 16.0, 3.5, 0.7, 0.10, 0.15, 0.60);
     case 'bus'
@@ -49,7 +58,9 @@ switch lower(class_name)
         error('sih_agent_props:unknownClass', ...
               'Unknown road-user class "%s".', class_name);
 end
-p.class = lower(class_name);
+p.class = key;
+if isempty(cache), cache = struct(); end
+cache.(key) = p;
 end
 
 % -------------------------------------------------------------------------

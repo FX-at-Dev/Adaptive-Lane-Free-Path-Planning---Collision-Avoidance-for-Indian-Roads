@@ -10,16 +10,21 @@ function world = sih_world_step(world, dt, cfg)
 
 t = world.t + dt;
 
+% The ego's footprint, for agents deciding whether it is in their way.
+[ecx, ecy, erad] = sih_ego_discs(world.ego.x, world.ego.y, world.ego.psi, cfg);
+
 for k = 1:numel(world.agents)
     a = world.agents(k);
 
     if ~a.active
-        if t >= a.t_spawn
-            a.active = true;       % event-triggered entry (e.g. cattle)
-        else
-            world.agents(k) = a;
-            continue;
-        end
+        continue;                  % removed from the scene
+    end
+    if t < a.t_spawn
+        % Waiting for its moment -- at the verge, at the kerb -- in plain
+        % view of the vehicle's sensors.
+        a.v = 0;
+        world.agents(k) = a;
+        continue;
     end
 
     % Only agents explicitly declared 'static' hold station. An agent that has
@@ -70,8 +75,48 @@ for k = 1:numel(world.agents)
     % very close range it halts, which prevents a pedestrian from registering a
     % collision against a stationary ego while leaving the committed-crossing
     % behaviour intact everywhere else.
+    %
+    % "In its way" is judged against the vehicle's whole footprint, not its
+    % reference point: the ego's pose is its rear axle, 3.35 m behind its
+    % nose, and a pedestrian crossing diagonally in front of a stopped car
+    % used to walk into the front corner because the axle looked clear.
+    if is_crosser
+        for q = 1:numel(ecx)        % not k: that is the agent being stepped
+            qx = ecx(q) - a.x;
+            qy = ecy(q) - a.y;
+            qf = cos(a.psi) * qx + sin(a.psi) * qy;
+            ql = -sin(a.psi) * qx + cos(a.psi) * qy;
+            % Its own body counts: a cow's nose is 1.1 m ahead of its centre.
+            if qf > 0 && qf < erad + p.length / 2 + 0.6 && abs(ql) < erad + p.width / 2 + 0.4
+                react = 0;
+            end
+        end
+    end
     if is_crosser && fwd > 0 && fwd < 2.2 && abs(lat) < 1.6
         react = 0;
+    end
+    % Halted in front of a car that is itself standing still, a walker or an
+    % animal goes round it rather than waiting: both waiting for the other
+    % kept a car and a pedestrian half a metre apart for twenty seconds. It
+    % turns, away from the car first, to the nearest heading along which a
+    % second's walk does not bring it closer; the halt above then releases
+    % it once it faces that way.
+    side_psi = NaN;
+    if is_crosser && react == 0 && world.ego.v < 0.3
+        c_now = local_clear_after(a, a.psi, 0, p, ecx, ecy, erad);
+        need = max(0.3, min(c_now, 0.8));
+        away = -1;
+        if lat < 0, away = 1; end
+        for turn = [0.5, 1.0, 1.5, 2.0]
+            for sgn = [away, -away]
+                h = a.psi + sgn * turn;
+                if local_clear_after(a, h, min(a.v_des, 1.2), p, ecx, ecy, erad) >= need
+                    side_psi = h;
+                    break;
+                end
+            end
+            if isfinite(side_psi), break; end
+        end
     end
 
     if ~is_crosser && fwd > 0 && fwd < d_react && abs(lat) < 3.2
@@ -108,6 +153,64 @@ for k = 1:numel(world.agents)
         end
     end
 
+    % ---- never drive into the ego --------------------------------------------
+    % If a vehicle's path would actually hit the ego's footprint -- not merely
+    % pass near it -- it is held to a speed it can still stop from before it
+    % gets there: v <= sqrt(2 a d). Measured to the footprint, not the rear
+    % axle (head-on, the ego's nose is 3.35 m nearer), and out to 40 m, since
+    % a fast vehicle needs more room than its reaction distance. Only a true
+    % collision course is affected, so a vehicle that can pass beside the
+    % ego still does, and the ego -- the planner -- deals with one that stops.
+    if ~is_crosser
+        for q = 1:numel(ecx)
+            qx = ecx(q) - a.x;
+            qy = ecy(q) - a.y;
+            qf = cos(a.psi) * qx + sin(a.psi) * qy;
+            ql = -sin(a.psi) * qx + cos(a.psi) * qy;
+            if qf > 0 && qf < 40 && abs(ql) < erad + p.width / 2 + 0.3
+                gap = qf - erad - p.length / 2 - 1.0;
+                v_safe = sqrt(2 * 0.8 * p.a_brake * max(gap, 0));
+                react = min(react, v_safe / max(a.v_des, 0.1));
+            end
+        end
+        % Halted by a stopped ego, it goes round: a driver turns the wheel
+        % and creeps past rather than waiting for ever for a car that
+        % cannot reverse. It commits to the smallest turn, away from the
+        % ego first, along which a second's creep keeps it clear and no
+        % closer than it already is, and holds that heading, creeping,
+        % until the ego is behind it (or moves off, or ten seconds pass).
+        c_now = local_clear_after(a, a.psi, 0, p, ecx, ecy, erad);
+        if isfinite(a.pass_psi)
+            a.pass_t = a.pass_t + dt;
+            behind = cos(a.pass_dir) * ex + sin(a.pass_dir) * ey < -(p.length / 2 + 1.0);
+            if world.ego.v > 0.5 || (behind && c_now > 0.8) || a.pass_t > 10
+                a.pass_psi = NaN;
+            end
+        elseif world.ego.v < 0.2 && fwd > 0 && a.v < 0.05 && c_now < 3.0
+            v_c = 0.8;
+            need = max(0.4, min(c_now, 1.0) - 0.02);
+            if c_now < 0.4, need = c_now; end      % already close: just not closer
+            away = -1;
+            if lat < 0, away = 1; end
+            for turn = [0.3, 0.6, 0.9, 1.2, 1.5]
+                for sgn = [away, -away]
+                    h = a.psi + sgn * turn;
+                    if local_clear_after(a, h, v_c, p, ecx, ecy, erad) >= need
+                        a.pass_psi = h;
+                        a.pass_dir = a.psi;
+                        a.pass_t = 0;
+                        break;
+                    end
+                end
+                if isfinite(a.pass_psi), break; end
+            end
+        end
+        if isfinite(a.pass_psi)
+            side_psi = a.pass_psi;
+            react = 0.8 / max(a.v_des, 0.1);
+        end
+    end
+
     % ---- desired heading -------------------------------------------------
     if strcmp(a.mode, 'cross')
         psi_des = a.psi;           % straight line, heading fixed at spawn
@@ -139,6 +242,29 @@ for k = 1:numel(world.agents)
         end
     end
 
+    if isfinite(side_psi)
+        psi_des = side_psi;
+        avoid = 0;
+    end
+
+    % A vehicle stays on the road. Swerving round the ego -- or round
+    % anything -- may not carry it off the carriageway: with the ego paused
+    % in mid-road, oncoming traffic used to drive onto the verge to get
+    % past. If keeping to the road means it cannot get past, it waits
+    % (the never-into-the-ego rule above stops it).
+    if ~is_crosser && (avoid ~= 0 || isfinite(side_psi)) && a.v > 0.1
+        h = psi_des + avoid;
+        look = max(a.v, 1.0) * 1.0;
+        [~, d1] = sih_cart2frenet(world.rp, a.x + look * cos(h), a.y + look * sin(h));
+        [s0a, d0a] = sih_cart2frenet(world.rp, a.x, a.y);
+        hw_a = interp1(world.rp.s, world.rp.halfwidth, min(max(s0a, 0), world.rp.length), 'linear');
+        lim = hw_a - p.width / 2 + 0.1;
+        if abs(d1) > lim && abs(d1) > abs(d0a)
+            avoid = 0;
+            if isfinite(side_psi), psi_des = a.psi; react = 0; end
+        end
+    end
+
     % ---- yaw rate limit, tighter for long vehicles -----------------------
     yaw_max = 2.4 / max(1.0, p.length / 2);
     dpsi    = sih_wrap_pi(psi_des + avoid - a.psi);
@@ -146,7 +272,19 @@ for k = 1:numel(world.agents)
 
     % ---- class-dependent erratic heading noise ---------------------------
     if p.erratic > 0
+        psi_was = a.psi;
         a.psi = a.psi + p.heading_noise * p.erratic * sqrt(dt) * randn();
+        % It may turn, but not into the ego: a 2.2 m cow turning on the spot
+        % beside a stopped car swung its body into it. A turn that brings it
+        % closer than a safe distance is refused; turning away -- which is
+        % how a halted walker eventually goes round a waiting car -- is not.
+        [ox, oy] = sih_agent_discs(a.x, a.y, psi_was, p);
+        [nx, ny] = sih_agent_discs(a.x, a.y, a.psi, p);
+        d_was = min(min(hypot(ox(:) - ecx(:).', oy(:) - ecy(:).')));
+        d_now = min(min(hypot(nx(:) - ecx(:).', ny(:) - ecy(:).')));
+        if d_now < d_was && d_now < erad + p.radius + 0.3
+            a.psi = psi_was;
+        end
     end
     a.psi = sih_wrap_pi(a.psi);
 
@@ -155,11 +293,38 @@ for k = 1:numel(world.agents)
     a.v = a.v + min(max(v_target - a.v, -p.a_brake*dt), p.a_brake*dt);
     a.v = min(max(a.v, 0), p.v_max);
 
-    a.x = a.x + a.v * cos(a.psi) * dt;
-    a.y = a.y + a.v * sin(a.psi) * dt;
+    % Never into the ego. Whatever the steering above decided, a step that
+    % would bring this road user within 0.4 m of the vehicle -- or closer
+    % than it already is, if it is nearer than that -- is not taken: going
+    % round a stopped car must not end in its side.
+    nx = a.x + a.v * cos(a.psi) * dt;
+    ny = a.y + a.v * sin(a.psi) * dt;
+    if a.v > 0
+        c_was = local_clear_at(a.x, a.y, a.psi, p, ecx, ecy, erad);
+        c_new = local_clear_at(nx, ny, a.psi, p, ecx, ecy, erad);
+        if c_new < c_was && c_new < 0.4
+            nx = a.x; ny = a.y; a.v = 0;
+        end
+    end
+    a.x = nx;
+    a.y = ny;
 
     world.agents(k) = a;
 end
 
 world.t = t;
+end
+
+% -------------------------------------------------------------------------
+function c = local_clear_after(a, h, v, p, ecx, ecy, erad)
+%LOCAL_CLEAR_AFTER Clearance to the ego after one second at speed v on heading h.
+[nx, ny] = sih_agent_discs(a.x + v * cos(h), a.y + v * sin(h), h, p);
+c = min(min(hypot(nx(:) - ecx(:).', ny(:) - ecy(:).'))) - erad - p.radius;
+end
+
+% -------------------------------------------------------------------------
+function c = local_clear_at(x, y, psi, p, ecx, ecy, erad)
+%LOCAL_CLEAR_AT Clearance to the ego of a road user at (x, y, psi).
+[nx, ny] = sih_agent_discs(x, y, psi, p);
+c = min(min(hypot(nx(:) - ecx(:).', ny(:) - ecy(:).'))) - erad - p.radius;
 end

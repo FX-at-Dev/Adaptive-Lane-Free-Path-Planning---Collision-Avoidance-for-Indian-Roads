@@ -80,7 +80,7 @@ m.frac_infeasible = mean(~log.feasible);
 m.plan_risk_max  = max(log.plan_risk);
 
 % ---- behaviour breakdown -------------------------------------------------
-states = {'CRUISE', 'FOLLOW', 'NUDGE', 'YIELD', 'CREEP', 'STOP'};
+states = {'CRUISE', 'FOLLOW', 'NUDGE', 'YIELD', 'CREEP', 'STOP', 'REVERSE'};
 m.state_names = states;
 m.state_frac  = zeros(1, numel(states));
 for i = 1:numel(states)

@@ -48,3 +48,14 @@ Thumbs.db
 # stay AFTER the !*.pptx negation above: the last matching pattern wins, so
 # placing it earlier let the negation re-include the lock file.
 ~$*
+
+# Local submission documents and presentation sources
+/SIH2026_26037_idea.pdf
+/SIH2026_26037_idea.pptx
+/ppt/
+/brag-output/
+/tools/
+/results/3d/sih26037_submission.mp4
+/results/3d/village_road.mp4
+
+

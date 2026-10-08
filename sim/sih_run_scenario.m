@@ -16,6 +16,9 @@ function [result, log] = sih_run_scenario(scn, cfg, opts)
 %   opts (optional):
 %       .verbose    print a progress line each second (default cfg.verbose)
 %       .snapshots  capture full state for animation (default true)
+%       .think      also capture what the stack was thinking -- detections,
+%                   predictions, candidate paths, the reason for the current
+%                   behaviour -- for the 3D visualiser (default cfg.debug.think)
 %
 %   result summarises the run; log holds per-step time series for metrics and
 %   plotting.
@@ -23,23 +26,18 @@ function [result, log] = sih_run_scenario(scn, cfg, opts)
 if nargin < 3, opts = struct(); end
 if ~isfield(opts, 'verbose'),   opts.verbose   = cfg.verbose; end
 if ~isfield(opts, 'snapshots'), opts.snapshots = true; end
+if ~isfield(opts, 'think')
+    opts.think = isfield(cfg, 'debug') && isfield(cfg.debug, 'think') && cfg.debug.think;
+end
+% The planner records its candidates only when asked, and it reads the flag
+% from cfg, so the option has to be reflected there to take effect.
+cfg.debug.think = opts.think;
 
 world = sih_world_init(scn, cfg);
-rp    = scn.rp;
+st    = sih_stack_init(world, cfg, opts.think);
 
-tracks   = [];
-next_id  = 1;
-ctrl     = struct();
-fsm      = [];
-traj     = [];
-info     = struct('feasible', true);
-bp       = struct('v_cap', cfg.plan.v_max, 'd_max', 2.5, ...
-                  'risk_tol', cfg.plan.risk_threshold, 'state', 'CRUISE');
-ra       = sih_risk_assess(world.ego, [], rp, cfg);
-
-dt          = cfg.sim.dt;
-N           = round(cfg.sim.t_end / dt);
-replan_every = max(1, round(cfg.sim.replan_dt / dt));
+dt = cfg.sim.dt;
+N  = round(cfg.sim.t_end / dt);
 
 log = local_init_log(N);
 snaps = {};
@@ -55,32 +53,11 @@ for k = 1:N
     % ---- ground truth advances -----------------------------------------
     world = sih_world_step(world, dt, cfg);
 
-    % ---- perception -----------------------------------------------------
-    dets = sih_sense(world, cfg);
-    [tracks, next_id, tdiag] = sih_tracker_step(tracks, dets, dt, next_id, cfg);
-
-    % ---- decision and planning, at the replan rate ----------------------
-    did_replan = (mod(k - 1, replan_every) == 0);
-    if did_replan
-        ra          = sih_risk_assess(world.ego, tracks, rp, cfg);
-        [fsm, bp]   = sih_behavior_fsm(fsm, world.ego, ra, info, cfg);
-        pred        = sih_predict_intent(tracks, cfg);
-        [traj, info] = sih_lattice_plan(world.ego, rp, pred, bp, cfg);
-        last_latency = info.latency_ms;
-        n_hyp = 0;
-        if ~isempty(pred.hyp)
-            n_hyp = numel(unique(pred.hyp));
-        end
-    else
-        last_latency = NaN;
-        n_hyp = log.n_hypotheses(max(k-1, 1));
-    end
-
-    % ---- control --------------------------------------------------------
-    % The controller reads the planned speed AND acceleration profile itself,
-    % so no separate speed setpoint is passed in.
-    [a_cmd, delta_cmd, ctrl] = sih_controller(world.ego, traj, ctrl, cfg);
-    world.ego = sih_bicycle_step(world.ego, a_cmd, delta_cmd, dt, cfg);
+    % ---- the stack: perception, decision and planning, control ----------
+    % The same step the Unity co-simulation runs (cosim/sih_cosim_serve.m);
+    % only the plant that moves the ego differs.
+    [st, a_cmd, delta_cmd, tk] = sih_stack_tick(st, world, k, cfg);
+    world.ego = sih_bicycle_step(world.ego, a_cmd, delta_cmd, dt, cfg, tk.gear);
 
     % ---- safety and goal, measured on ground truth ----------------------
     [min_clear, hit, worst_id] = sih_clearance_truth(world, cfg);
@@ -89,8 +66,8 @@ for k = 1:N
         collide_t = t;
     end
 
-    d_goal = hypot(world.ego.x - scn.goal(1), world.ego.y - scn.goal(2));
-    if ~reached && d_goal < cfg.dec.goal_tol
+    [at_goal, d_goal] = sih_goal_reached(world.ego, scn.goal, scn.rp, cfg);
+    if ~reached && at_goal
         reached   = true;
         t_reached = t;
     end
@@ -105,24 +82,24 @@ for k = 1:N
     log.delta(k)        = world.ego.delta;
     log.min_clear(k)    = min_clear;
     log.worst_id(k)     = worst_id;
-    log.latency_ms(k)   = last_latency;
-    log.state{k}        = bp.state;
-    log.v_cap(k)        = bp.v_cap;
-    log.n_tracks(k)     = tdiag.n_track;
-    log.n_confirmed(k)  = tdiag.n_confirmed;
-    log.n_det(k)        = tdiag.n_det;
-    log.n_hypotheses(k) = n_hyp;
-    log.feasible(k)     = info.feasible;
-    log.plan_risk(k)    = traj.risk;
+    log.latency_ms(k)   = tk.latency_ms;
+    log.state{k}        = st.bp.state;
+    log.v_cap(k)        = st.bp.v_cap;
+    log.n_tracks(k)     = tk.tdiag.n_track;
+    log.n_confirmed(k)  = tk.tdiag.n_confirmed;
+    log.n_det(k)        = tk.tdiag.n_det;
+    log.n_hypotheses(k) = tk.n_hyp;
+    log.feasible(k)     = st.info.feasible;
+    log.plan_risk(k)    = st.traj.risk;
     log.d_goal(k)       = d_goal;
 
     if opts.snapshots && mod(k - 1, 2) == 0
-        snaps{end+1} = local_snapshot(world, tracks, traj, bp, t, min_clear); %#ok<AGROW>
+        snaps{end+1} = sih_snapshot(world, st, tk, t, min_clear); %#ok<AGROW>
     end
 
     if opts.verbose && mod(k, round(1/dt)) == 0
         fprintf('  t=%5.1f  v=%4.1f  %-7s  clear=%6.2f  tracks=%2d  lat=%5.1fms\n', ...
-                t, world.ego.v, bp.state, min_clear, tdiag.n_confirmed, ...
+                t, world.ego.v, st.bp.state, min_clear, tk.tdiag.n_confirmed, ...
                 local_last_finite(log.latency_ms, k));
     end
 
@@ -153,43 +130,6 @@ for i = k:-1:1
         v = arr(i);
         return;
     end
-end
-end
-
-% -------------------------------------------------------------------------
-function s = local_snapshot(world, tracks, traj, bp, t, min_clear)
-%LOCAL_SNAPSHOT Minimal state needed to redraw a frame later.
-s.t   = t;
-s.ego = world.ego;
-s.min_clear = min_clear;
-s.state = bp.state;
-
-s.agents = struct('x', {}, 'y', {}, 'psi', {}, 'class', {}, 'id', {});
-for k = 1:numel(world.agents)
-    a = world.agents(k);
-    if ~a.active
-        continue;
-    end
-    s.agents(end+1) = struct('x', a.x, 'y', a.y, 'psi', a.psi, ...
-                             'class', a.class, 'id', a.id);
-end
-
-s.tracks = struct('x', {}, 'y', {}, 'psi', {}, 'v', {}, 'class', {}, 'status', {});
-for k = 1:numel(tracks)
-    tr = tracks(k);
-    if strcmp(tr.status, 'tentative')
-        continue;
-    end
-    s.tracks(end+1) = struct('x', tr.x(1), 'y', tr.x(2), 'psi', tr.x(4), ...
-                             'v', tr.x(3), 'class', tr.class, 'status', tr.status);
-end
-
-if isempty(traj)
-    s.traj_x = [];
-    s.traj_y = [];
-else
-    s.traj_x = traj.x;
-    s.traj_y = traj.y;
 end
 end
 

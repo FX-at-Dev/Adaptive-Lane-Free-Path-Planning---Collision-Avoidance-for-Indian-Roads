@@ -1,4 +1,4 @@
-function [scn, cfg] = sih_scn_urban_intersection(cfg)
+function [scn, cfg] = sih_scn_urban_intersection(cfg, seed)
 %SIH_SCN_URBAN_INTERSECTION Unsignalled four-way crossing with unyielding traffic.
 %
 %   Scenario 2 of the five required by the problem statement.
@@ -14,6 +14,11 @@ function [scn, cfg] = sih_scn_urban_intersection(cfg)
 %   in it. A pure in-path lead check sees nothing until the moment of impact,
 %   because a crossing vehicle is not in the path until it is. The behaviour
 %   layer then has to accept or reject gaps, which is what YIELD is for.
+%   [scn, cfg] = SIH_SCN_URBAN_INTERSECTION(cfg, seed) draws a random layout that keeps
+%   the scenario's story (sih_scn_random): which road users, how many, where,
+%   how fast and when are drawn from ranges, and the draw is checked against
+%   the rules of the road (sih_scn_validate). Without a seed the scripted
+%   layout below is used, which keeps the regression suite reproducible.
 
 if nargin < 1 || isempty(cfg)
     cfg = sih_config();
@@ -30,6 +35,9 @@ scn.desc = 'Unsignalled urban crossroads, cross traffic that does not yield';
 scn.rp   = sih_ref_path([0 0; 60 0; 120 0; 170 0], 0.25, cfg.plan.corridor_halfwidth);
 
 XJ = 85;    % corridor station of the junction centre
+% The cross street: [station half-width], kept clear of scenery and allowed
+% for vehicles starting off the main road.
+scn.cross_streets = [XJ, 7.0];
 
 scn.ego  = struct('x', 0, 'y', 0, 'psi', 0, 'v', 8.0);
 [gx, gy] = sih_wp_at(scn.rp, scn.rp.length - 12, 0);
@@ -56,6 +64,9 @@ scn.agents = [ ...
     % it made the exit genuinely impassable, and a scenario the vehicle cannot
     % physically complete measures nothing about the planner.
     local_parked(6, 'bus', scn.rp, XJ + 46, -3.4)];
+if nargin >= 2 && ~isempty(seed)
+    [scn, cfg] = sih_scn_random(scn, cfg, seed, @local_draw);
+end
 end
 
 % -------------------------------------------------------------------------
@@ -93,4 +104,24 @@ function a = local_parked(id, class_name, rp, s_at, d_at)
 %LOCAL_PARKED A stationary vehicle at the roadside.
 [x0, y0] = sih_wp_at(rp, s_at, d_at);
 a = sih_agent_new(id, class_name, x0, y0, sih_wp_heading(rp, s_at), 0.0, 'static', [], 0);
+end
+
+% -------------------------------------------------------------------------
+function A = local_draw(rp, cfg, R)
+%LOCAL_DRAW Urban crossroads: cross traffic that does not yield, a
+%   pedestrian beyond the junction, a vehicle parked further on.
+XJ = 85; A = []; id = 0;
+speed = struct('auto', [5.0 6.5], 'car', [6.5 8.5], 'two_wheeler', [8.0 10.0], 'bus', [5.0 6.5]);
+for k = 1:R.int(3, 5)
+    id = id + 1;
+    cls = R.pick({'auto', 'car', 'two_wheeler', 'auto', 'car', 'bus'});
+    dir = R.pick({1, -1});
+    A = [A, sih_role('cross_traffic', id, cls, rp, XJ + R.u(-7, 14), -dir * R.u(45, 65), dir * 70, ...
+                     R.u(speed.(cls)(1), speed.(cls)(2)))]; %#ok<AGROW>
+end
+id = id + 1;
+side = R.pick({1, -1});
+A = [A, sih_role('walker', id, 'pedestrian', rp, XJ + R.u(20, 32), side * 5.5, -side * 5.5, R.u(1.0, 1.3), R.u(6, 11))];
+id = id + 1;
+A = [A, sih_role('parked', id, R.pick({'bus', 'truck', 'car'}), rp, XJ + R.u(38, 55), R.pick({1, -1}) * 3.4)];
 end

@@ -1,0 +1,109 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f0608e6819d7b9b4fa24442b56edd799, type: 3}
+  m_Name: Catalog
+  m_EditorClassIdentifier: Assembly-CSharp::Sih.SihCatalog
+  roadUsers:
+  - key: car
+    variants:
+    - prefab: {fileID: 16766213510409473, guid: dd65b554a09da8846988f52c8dae689f, type: 3}
+      weight: 1
+  - key: bus
+    variants:
+    - prefab: {fileID: 6867762012968803876, guid: b332bdd1abcdc29408435bd0fbff52d1, type: 3}
+      weight: 1
+  - key: truck
+    variants:
+    - prefab: {fileID: 3629716614911671225, guid: 20f7370dcede9fc4797281da51f51977, type: 3}
+      weight: 1
+  - key: auto
+    variants:
+    - prefab: {fileID: 3502418342616875892, guid: 6fed8ad2479a45843897e68ff4550752, type: 3}
+      weight: 1
+  - key: two_wheeler
+    variants:
+    - prefab: {fileID: 3207337615653735271, guid: 070f1fd44c8ad5e4ab25f8e1966166ed, type: 3}
+      weight: 1
+  - key: bicycle
+    variants:
+    - prefab: {fileID: 6686337638099512720, guid: aab65e789faf08c43972e038f8e97fef, type: 3}
+      weight: 1
+  - key: pedestrian
+    variants:
+    - prefab: {fileID: 6260174334812413713, guid: 16500f847b95b2240b2652fb028d514c, type: 3}
+      weight: 1
+  - key: cattle
+    variants:
+    - prefab: {fileID: 4698394548417208751, guid: 361da37a43fe7ac4c96e17d09b67abb3, type: 3}
+      weight: 1
+  - key: pushcart
+    variants:
+    - prefab: {fileID: 8696532296154218910, guid: 70c8d3980d7e8194ab9fd6390a88645e, type: 3}
+      weight: 1
+  - key: static
+    variants:
+    - prefab: {fileID: 6331651580402124673, guid: abd44d36504477e449f7586128d243ce, type: 3}
+      weight: 1
+  scenery:
+  - key: house
+    variants:
+    - prefab: {fileID: 8749423458894465545, guid: 2dc65ad5f87e00347a340a93df7572c2, type: 3}
+      weight: 1
+    - prefab: {fileID: 4011657683611784917, guid: b90e3d68351476c4294e1ec9c5a84bfa, type: 3}
+      weight: 1
+    - prefab: {fileID: 2122269831121320506, guid: 8dad0210ecef6434aafbebbdc26b5fba, type: 3}
+      weight: 1
+    - prefab: {fileID: 435708215678898381, guid: 329e65bb1d8f25a4da6d1dcbcbe7bb87, type: 3}
+      weight: 1
+    - prefab: {fileID: 8347499824106199295, guid: de4f3d88bf6ae3f40be0d00111a253b6, type: 3}
+      weight: 1
+    - prefab: {fileID: 1391971787018234237, guid: 4d846d825780e7f4896f69908e668bbc, type: 3}
+      weight: 1
+  - key: tree
+    variants:
+    - prefab: {fileID: 9142351439434009103, guid: 1a943d7bce5f9514fb7da6a91b689a3f, type: 3}
+      weight: 1
+    - prefab: {fileID: 129072428418262820, guid: 9c189b0e4f9d1ad418c52e3468b96519, type: 3}
+      weight: 1
+    - prefab: {fileID: 3278428546124421446, guid: f361126d6bfb1344bb51a814a1ccc341, type: 3}
+      weight: 1
+    - prefab: {fileID: 8254826705838774463, guid: ea1cea3f1ea91db4a892bb2ea282ee02, type: 3}
+      weight: 1
+  - key: wall
+    variants:
+    - prefab: {fileID: 6538917159905536195, guid: 449ff802c1001554dbc058bb497a720c, type: 3}
+      weight: 1
+    - prefab: {fileID: 1856250236151083544, guid: cbf3be8c78de4b14b85b7e4516d5e935, type: 3}
+      weight: 1
+    - prefab: {fileID: 8997117113591009812, guid: 455bc7498a551e245b4919a3e57fc708, type: 3}
+      weight: 1
+    - prefab: {fileID: 4826415080020903892, guid: ef661a13da5deaf44b40d36fb75015cb, type: 3}
+      weight: 1
+    - prefab: {fileID: 1279176191721105580, guid: c3ad8adb7fb608d4482e499a7e01ee70, type: 3}
+      weight: 1
+    - prefab: {fileID: 2170966941380170012, guid: c532961e28e7bdf4694952c1eb100bfb, type: 3}
+      weight: 1
+  - key: field
+    variants: []
+  - key: pole
+    variants:
+    - prefab: {fileID: 7305198463806531845, guid: 44d98fc116a4c0c4ba9adb159e53bbbc, type: 3}
+      weight: 1
+  - key: cone
+    variants: []
+  - key: barrier
+    variants: []
+  - key: sign
+    variants: []
+  - key: milestone
+    variants: []
+  fallbackRoadUser: {fileID: 16766213510409473, guid: dd65b554a09da8846988f52c8dae689f, type: 3}

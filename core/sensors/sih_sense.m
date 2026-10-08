@@ -1,4 +1,4 @@
-function dets = sih_sense(world, cfg)
+function dets = sih_sense(world, cfg, use)
 %SIH_SENSE Run the camera, radar and LiDAR models over the ground truth.
 %
 %   dets = SIH_SENSE(world, cfg) returns the fused detection set for one scan:
@@ -9,24 +9,41 @@ function dets = sih_sense(world, cfg)
 %       dets.sensor      {N x 1} originating sensor
 %       dets.truth_id    [N x 1] ground-truth agent id, or 0 for clutter
 %                        (diagnostics only -- never read by the tracker)
+%       dets.box, box_full, origin, road_psi   the object's extent, where the
+%                        sensor measures one (sih_dets_empty): this
+%                        object-level LiDAR reports the whole box, true size
+%                        and orientation, as a LiDAR's object list would
 %
 %   The three sensors are deliberately complementary and individually poor.
 %   The camera has good bearing and weak depth, the radar the reverse, and the
 %   LiDAR is accurate but short ranged and blind to class. No single one is
 %   sufficient, which is what makes the fusion step earn its place rather than
 %   being decorative.
+%
+%   dets = SIH_SENSE(world, cfg, use) runs only the sensors flagged in use,
+%   a logical [camera radar lidar]. The co-simulation uses this when Unity
+%   supplies some sensors itself (core/perception); a sensor that is skipped
+%   draws no random numbers, and with all three on the result is identical
+%   to the two-argument call.
+
+if nargin < 3
+    use = true(1, 3);
+end
 
 specs = {cfg.sensor.camera, cfg.sensor.radar, cfg.sensor.lidar};
 names = {'camera', 'radar', 'lidar'};
 
-dets = local_empty();
+dets = sih_dets_empty();
 
 % Precompute occlusion blockers once: every disc of every active agent.
 [bx, by, br, bid] = local_blockers(world.agents);
 
 for si = 1:numel(specs)
+    if ~use(si)
+        continue;
+    end
     d = local_scan(world, specs{si}, names{si}, bx, by, br, bid, cfg);
-    dets = local_append(dets, d);
+    dets = sih_dets_cat(dets, d);
 end
 end
 
@@ -34,7 +51,7 @@ end
 function dets = local_scan(world, spec, name, bx, by, br, bid, cfg)
 %LOCAL_SCAN One sensor's view of the world.
 
-dets = local_empty();
+dets = sih_dets_empty();
 ego  = world.ego;
 
 for k = 1:numel(world.agents)
@@ -112,6 +129,16 @@ for k = 1:numel(world.agents)
     end
 
     dets = local_push(dets, zx, zy, R, cls, name, a.id);
+    % The road direction there, which every sensor's perception knows.
+    [~, ~, ~, road_psi] = sih_cart2frenet(world.rp, zx, zy);
+    n = numel(dets.x);
+    dets.road_psi(n) = road_psi;
+    if strcmp(name, 'lidar')
+        % The object's whole box.
+        dets.box(n, :) = [a.props.length, a.props.width, a.psi];
+        dets.box_full(n) = true;
+        dets.origin(n, :) = [ego.x, ego.y];
+    end
 end
 
 % ---- clutter -------------------------------------------------------------
@@ -191,11 +218,6 @@ n = k - 1;
 end
 
 % -------------------------------------------------------------------------
-function d = local_empty()
-d.x = zeros(0,1); d.y = zeros(0,1); d.R = zeros(2,2,0);
-d.class = {}; d.sensor = {}; d.truth_id = zeros(0,1);
-end
-
 function d = local_push(d, x, y, R, cls, sensor, tid)
 n = numel(d.x) + 1;
 d.x(n,1) = x;
@@ -204,18 +226,9 @@ d.R(:,:,n) = R;
 d.class{n,1} = cls;
 d.sensor{n,1} = sensor;
 d.truth_id(n,1) = tid;
-end
-
-function a = local_append(a, b)
-n = numel(a.x);
-m = numel(b.x);
-if m == 0
-    return;
-end
-a.x(n+1:n+m,1) = b.x;
-a.y(n+1:n+m,1) = b.y;
-a.R(:,:,n+1:n+m) = b.R;
-a.class(n+1:n+m,1) = b.class;
-a.sensor(n+1:n+m,1) = b.sensor;
-a.truth_id(n+1:n+m,1) = b.truth_id;
+d.box(n,:) = [NaN, NaN, NaN];
+d.box_full(n,1) = false;
+d.origin(n,:) = [NaN, NaN];
+d.road_psi(n,1) = NaN;
+d.surface(n,1) = false;
 end

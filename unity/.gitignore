@@ -1,0 +1,14 @@
+# Unity: generated, machine-local or rebuilt by SihBuild
+/SIH3D/[Ll]ibrary/
+/SIH3D/[Tt]emp/
+/SIH3D/[Ll]ogs/
+/SIH3D/[Uu]ser[Ss]ettings/
+/SIH3D/[Oo]bj/
+/SIH3D/*.csproj
+/SIH3D/*.sln
+/SIH3D/*.slnx
+/SIH3D/.vs/
+/SIH3D/Assets/StreamingAssets/
+/SIH3D/Assets/StreamingAssets.meta
+/Build/
+/*.log

@@ -101,6 +101,18 @@ d_set = linspace(-d_limit, d_limit, n_off);
 % possible, so it is always offered.
 d_set = unique([d_set, d0]);
 
+% The lane to keep. India drives on the left: on a road wide enough for
+% two lanes the vehicle holds the centre of the left one (sih_lane_centre),
+% leaving the right one to oncoming traffic and to overtaking, and when it
+% stops -- for a crossing cow, in a queue -- it stops in its own lane
+% instead of across the road. A single-lane road is driven down the middle.
+d_lane = sih_lane_centre(halfwidth, cfg);
+lane_w = 1;
+if isfield(bp, 'lane_w'), lane_w = bp.lane_w; end
+if abs(d_lane) <= d_limit
+    d_set = unique([d_set, d_lane]);
+end
+
 % Terminal speeds are sampled over what is REACHABLE from the current speed
 % within the horizon, not over a fixed band below the speed cap.
 %
@@ -146,7 +158,18 @@ n_feas = 0;
 % outside: "no feasible plan" looks identical whether the cause is traffic, a
 % speed target the vehicle cannot reach, or a curvature limit. These counters
 % are returned in info and cost nothing to maintain.
-n_rej = struct('lon', 0, 'slope', 0, 'curv', 0, 'speed', 0, 'alat', 0, 'risk', 0);
+n_rej = struct('lon', 0, 'slope', 0, 'curv', 0, 'speed', 0, 'alat', 0, 'risk', 0, 'road', 0, 'hold', 0);
+
+% Candidate record for the 3D visualiser (cfg.debug.think). Observation only:
+% it is filled alongside the real filters and never read by them. Status codes
+% are 0 accepted, 1 over the risk tolerance, 2 geometric conflict, 3 slope
+% (non-holonomic), 4 curvature, 5 speed, 6 lateral acceleration.
+think = isfield(cfg, 'debug') && isfield(cfg.debug, 'think') && cfg.debug.think;
+if think
+    cand = struct('x', zeros(cfg.debug.cand_points, 0), ...
+                  'y', zeros(cfg.debug.cand_points, 0), ...
+                  'cost', zeros(1, 0), 'risk', zeros(1, 0), 'code', zeros(1, 0));
+end
 
 for T = cfg.plan.horizon_T
     tv = (0:cfg.pred.dt:T)';
@@ -268,6 +291,19 @@ for T = cfg.plan.horizon_T
     % rather than the displacement approximation it had to be before.
     holo_ok = all(abs(DPr) <= cfg.plan.max_path_slope, 1);
 
+    % ON THE ROAD, ALL THE WAY. Only the end of a candidate was held to the
+    % corridor; the curve on the way there was not. Turned 24 degrees off the
+    % road after easing round a cow, every candidate set off along that
+    % heading and bowed outward before coming back, and at 12 m/s, replanned
+    % from ever further out, the vehicle drove 8 m off the road "on plan".
+    % Every sample must keep the vehicle's side inside the road -- or, where
+    % it already is outside, no further out than it is now.
+    hw_s = interp1(rp.s, rp.halfwidth, min(max(Sp, 0), rp.length), 'linear');   % [nT x nP]
+    road_lim = max(hw_s - 0.5 * cfg.ego.width + cfg.plan.road_overhang, abs(d0) + 1e-3);
+    road_ok = all(abs(Dp) <= road_lim, 1);
+    holo_ok = holo_ok & road_ok;
+    n_rej.road = n_rej.road + sum(~road_ok);
+
     % ---- one Cartesian conversion for every pair ------------------------
     [cxv, cyv, cpv] = sih_frenet2cart(rp, Sp(:), Dp(:), DPr(:));
     CX   = reshape(cxv, nT, nP);
@@ -304,7 +340,14 @@ for T = cfg.plan.horizon_T
     max_al = max(V.^2 .* abs(KAP), [], 1);
 
     ok_curv  = max_k  <= cfg.metric.curv_limit * 1.5;
-    ok_speed = max_v  <= v_cap + 1.5;
+    % The cap limits where a candidate may GO, not where the vehicle already
+    % is. Every candidate starts at the current speed, so when the behaviour
+    % layer lowered the cap below it (easing round a cyclist at 8 m/s under a
+    % new 4 m/s cap) a test against the cap alone rejected all of them --
+    % including every one that brakes down to it -- and "no plan" became an
+    % emergency stop on an empty road. A candidate may not speed up past the
+    % cap; slowing towards it is exactly what is wanted.
+    ok_speed = max_v  <= max(v_cap, ego.v) + 1.5;
     ok_alat  = max_al <= cfg.veh.a_lat_max * 1.4;
 
     n_rej.slope = n_rej.slope + sum(~holo_ok);
@@ -312,7 +355,38 @@ for T = cfg.plan.horizon_T
     n_rej.speed = n_rej.speed + sum(holo_ok & ok_curv & ~ok_speed);
     n_rej.alat  = n_rej.alat  + sum(holo_ok & ok_curv & ok_speed & ~ok_alat);
 
-    kin_ok = holo_ok & ok_curv & ok_speed & ok_alat;
+    % ROOM TO PULL OUT. No path may end closer than cfg.dec.standoff behind
+    % something standing in the way while still in line with it (bp.hold):
+    % from a metre behind a cart a car that cannot reverse has no way round
+    % it. Pulling out past it, or staying put, is always allowed.
+    hold_ok = true(1, nP);
+    if isfield(bp, 'hold') && ~isempty(bp.hold)
+        nose = cfg.ego.length - 0.5 * (cfg.ego.length - cfg.ego.wheelbase);
+        band = 0.5 * cfg.ego.width + 0.3;
+        for h = 1:size(bp.hold, 1)
+            ends_close = Sp(end, :) + nose > bp.hold(h, 1) & Sp(end, :) < bp.hold(h, 1) + cfg.dec.standoff & Strav > 0.05;
+            in_line = Dp(end, :) > bp.hold(h, 2) - band & Dp(end, :) < bp.hold(h, 3) + band;
+            hold_ok = hold_ok & ~(ends_close & in_line);
+        end
+    end
+    n_rej.hold = n_rej.hold + sum(holo_ok & ~hold_ok);
+
+    kin_ok = holo_ok & ok_curv & ok_speed & ok_alat & hold_ok;
+
+    if think
+        code = zeros(1, nP);
+        code(~ok_alat)  = 6;
+        code(~ok_speed) = 5;
+        code(~ok_curv)  = 4;
+        code(~holo_ok)  = 3;
+        rej = find(~kin_ok);
+        ks  = round(linspace(1, nT, cfg.debug.cand_points));
+        cand.x    = [cand.x,    CX(ks, rej)];
+        cand.y    = [cand.y,    CY(ks, rej)];
+        cand.cost = [cand.cost, NaN(1, numel(rej))];
+        cand.risk = [cand.risk, NaN(1, numel(rej))];
+        cand.code = [cand.code, code(rej)];
+    end
 
     % ---- collision check, batched over everything that survived ---------
     keep = find(kin_ok);
@@ -331,8 +405,8 @@ for T = cfg.plan.horizon_T
         d1 = d_set(DI(p));
         v1 = v_set(VI(p));
 
-        cost = local_cost(Sp(:,p), Sdp(:,p), Sjp(:,p), Djp(:,p), d1, v1, T, ...
-                          max_k(p), min_clear, risk, s0, v_cap, cfg);
+        cost = local_cost(Sp(:,p), Sdp(:,p), Sjp(:,p), Djp(:,p), d1 - d_lane, v1, T, ...
+                          max_k(p), min_clear, risk, s0, v_cap, cfg, lane_w);
 
         % Building the result struct here, for every surviving candidate, was
         % measured to cost more than the collision check itself: it copies ten
@@ -344,6 +418,20 @@ for T = cfg.plan.horizon_T
             relax_score = score;
             relax       = local_pack(tv, CX, CY, CPSI, V, Sp, Dp, KAP, p, ...
                                      cost, risk, min_clear, T, d1, v1, cfg, false);
+        end
+
+        if think
+            ccode = 0;
+            if risk > bp.risk_tol
+                ccode = 1;
+            elseif collides && min_clear < -0.05 && risk > 0.5 * bp.risk_tol
+                ccode = 2;
+            end
+            cand.x    = [cand.x,    CX(ks, p)];
+            cand.y    = [cand.y,    CY(ks, p)];
+            cand.cost = [cand.cost, cost];
+            cand.risk = [cand.risk, risk];
+            cand.code = [cand.code, ccode];
         end
 
         if risk > bp.risk_tol
@@ -449,6 +537,33 @@ info.latency_ms  = toc(t_start) * 1000;
 info.s0          = s0;
 info.d0          = d0;
 info.d_limit     = d_limit;
+
+if think
+    info.cand = local_thin_candidates(cand, cfg.debug.max_candidates);
+end
+end
+
+% -------------------------------------------------------------------------
+function c = local_thin_candidates(c, cap)
+%LOCAL_THIN_CANDIDATES Keep the cheapest accepted candidates plus a spread of
+%   rejected ones, so the picture shows both what was chosen between and what
+%   was ruled out, without shipping hundreds of near-duplicate curves.
+n = numel(c.code);
+if n <= cap
+    return;
+end
+acc = find(c.code == 0);
+[~, o] = sort(c.cost(acc));
+acc = acc(o);
+n_acc = min(numel(acc), round(0.6 * cap));
+keep = acc(1:n_acc);
+rej = find(c.code ~= 0);
+n_rej = min(numel(rej), cap - n_acc);
+if n_rej > 0
+    keep = [keep, rej(unique(round(linspace(1, numel(rej), n_rej))))];
+end
+c.x = c.x(:, keep);  c.y = c.y(:, keep);
+c.cost = c.cost(keep);  c.risk = c.risk(keep);  c.code = c.code(keep);
 end
 
 % -------------------------------------------------------------------------
@@ -467,7 +582,7 @@ end
 
 % -------------------------------------------------------------------------
 function J = local_cost(s_t, sd_t, js_t, jd_t, d1, v1, T, max_k, ...
-                        min_clear, risk, s0, v_cap, cfg)
+                        min_clear, risk, s0, v_cap, cfg, lane_w)
 %LOCAL_COST Scalar score for one candidate. Lower is better.
 %
 %   Terms are normalised to roughly comparable magnitudes so the weights in
@@ -478,7 +593,7 @@ J = cfg.plan.w_risk * risk;
 
 % Comfort: mean squared jerk in both axes, scaled so a typical 10 m/s^3
 % manoeuvre contributes order one.
-J = J + cfg.plan.w_jerk * (mean(js_t.^2) + mean(jd_t.^2)) / 100;
+J = J + cfg.plan.w_jerk * (sih_mean(js_t.^2) + sih_mean(jd_t.^2)) / 100;
 
 % Path curvature.
 J = J + cfg.plan.w_curv * max_k^2;
@@ -487,23 +602,26 @@ J = J + cfg.plan.w_curv * max_k^2;
 shortfall = max(0, (s0 + v_cap * T) - s_t(end)) / max(T, 0.1);
 J = J + cfg.plan.w_progress * shortfall;
 
-% Mild preference for the corridor centre. Deliberately mild: on an unmarked
-% road, leaving the centre is normal driving, not a fault.
-J = J + cfg.plan.w_offset * d1^2;
+% Preference for the lane centre (d1 is measured from it, sih_lane_centre):
+% strong enough to keep to the left lane, weak enough that risk and
+% clearance still move the vehicle out of it to pass a cart or a parked car.
+J = J + lane_w * cfg.plan.w_offset * d1^2;
 
 % Speed tracking.
 J = J + cfg.plan.w_speed_dev * (v1 - v_cap)^2;
 
-% Clearance: reward keeping a buffer, but stop rewarding beyond a few metres
-% so the planner does not hug the far edge of an empty road.
-CLEAR_REF = 2.5;
+% Clearance: reward keeping a buffer, but stop rewarding beyond a metre and
+% a half, so the planner does not hug the far edge of an empty road -- and
+% does not find passing a parked stall a metre off on a village road about
+% as bad as not moving at all, which left it standing behind the stall.
+CLEAR_REF = 1.5;
 if isfinite(min_clear)
     J = J + cfg.plan.w_clearance * max(0, CLEAR_REF - min_clear)^2;
 end
 
 % Discourage dawdling: a candidate that barely moves scores badly even when it
 % is perfectly safe, otherwise standing still is an attractive local optimum.
-if mean(sd_t) < 0.3
+if sih_mean(sd_t) < 0.3
     J = J + 25;
 end
 end
